@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "PerfPilot Load Tester",
+  "version": "0.3.0",
+  "minimum_chrome_version": "114",
+  "description": "JMeter-style load testing in a compact side panel: recording, variables, assertions, live results, history and .jmx export.",
+  "permissions": ["storage", "activeTab", "webRequest", "sidePanel", "cookies"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "side_panel": { "default_path": "panel.html" },
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "action": { "default_title": "PerfPilot", "default_icon": { "16": "icons/16.png", "48": "icons/48.png" } }
+}

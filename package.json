@@ -1,0 +1,12 @@
+{
+  "name": "perfpilot",
+  "version": "0.3.0",
+  "private": true,
+  "description": "JMeter-style load testing in a compact Chrome side panel.",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check background.js && node --check jmx.js && node --check pdf.js && node --check correlate.js && node --check extract.js && node --check stats.js && node --check session.js && node --check panel.js"
+  }
+}
