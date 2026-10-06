@@ -11,7 +11,7 @@
   function wrap(s, size, bold, maxW) { const out = []; let cur = ''; for (const w of clean(s).split(' ')) { const t = cur ? cur + ' ' + w : w; if (tw(t, size, bold) > maxW && cur) { out.push(cur); cur = w; } else cur = t; } if (cur) out.push(cur); return out; }
 
   class Page {
-    constructor() { this.o = []; this.img = false; }
+    constructor() { this.o = []; this.images = []; }
     rect(x, y, w, h, o = {}) {
       const Y = PH - y - h, r = Math.min(o.r || 0, w / 2, h / 2), p = this.o; p.push('q');
       if (o.fill) p.push(rgb(o.fill) + ' rg'); if (o.stroke) { p.push(rgb(o.stroke) + ' RG'); p.push((o.lw || 1) + ' w'); }
@@ -25,20 +25,26 @@
     text(s, x, y, o = {}) { const size = o.size || 10, bold = !!o.bold; if (o.maxW) s = fit(s, size, bold, o.maxW); const w = tw(s, size, bold);
       if (o.align === 'right') x -= w; else if (o.align === 'center') x -= w / 2;
       this.o.push(`BT /${bold ? 'F2' : 'F1'} ${size} Tf ${rgb(o.color || '#000000')} rg ${f(x)} ${f(PH - y)} Td (${esc(s)}) Tj ET`); }
-    image(x, y, w, h) { this.img = true; this.o.push(`q ${f(w)} 0 0 ${f(h)} ${f(x)} ${f(PH - y - h)} cm /Im1 Do Q`); }
+    image(x, y, w, h, name = 'Im1') { this.images.push(name); this.o.push(`q ${f(w)} 0 0 ${f(h)} ${f(x)} ${f(PH - y - h)} cm /${name} Do Q`); }
   }
 
-  function serialize(pages, image) {
+  function serialize(pages, images) {
     const objs = []; const res = () => (objs.push(null), objs.length);
-    const cat = res(), pgs = res(), f1 = res(), f2 = res(); const im = image ? res() : 0; const ids = [];
+    const cat = res(), pgs = res(), f1 = res(), f2 = res(), imageIds = {};
+    Object.keys(images).forEach(name => { imageIds[name] = res(); });
+    const ids = [];
     pages.forEach(p => { const c = res(), g = res(); ids.push(g);
       const body = p.o.join('\n'); objs[c - 1] = `<< /Length ${body.length} >>\nstream\n${body}\nendstream`;
-      objs[g - 1] = `<< /Type /Page /Parent ${pgs} 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >>${p.img && im ? ` /XObject << /Im1 ${im} 0 R >>` : ''} >> /Contents ${c} 0 R >>`; });
+      const xobjects = p.images.map(name => `/${name} ${imageIds[name]} 0 R`).join(' ');
+      objs[g - 1] = `<< /Type /Page /Parent ${pgs} 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >>${xobjects ? ` /XObject << ${xobjects} >>` : ''} >> /Contents ${c} 0 R >>`; });
     objs[cat - 1] = `<< /Type /Catalog /Pages ${pgs} 0 R >>`;
     objs[pgs - 1] = `<< /Type /Pages /Kids [${ids.map(i => i + ' 0 R').join(' ')}] /Count ${ids.length} >>`;
     objs[f1 - 1] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
     objs[f2 - 1] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
-    if (image) objs[im - 1] = `<< /Type /XObject /Subtype /Image /Width ${image.w} /Height ${image.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.data.length} >>\nstream\n${image.data}\nendstream`;
+    Object.keys(images).forEach(name => {
+      const image = images[name], id = imageIds[name];
+      objs[id - 1] = `<< /Type /XObject /Subtype /Image /Width ${image.w} /Height ${image.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.data.length} >>\nstream\n${image.data}\nendstream`;
+    });
     let out = '%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n'; const off = [];
     objs.forEach((o, i) => { off.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
     const xr = out.length; out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + off.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
@@ -46,7 +52,49 @@
     const u = new Uint8Array(out.length); for (let i = 0; i < out.length; i++) u[i] = out.charCodeAt(i) & 255; return u;
   }
 
-  function buildPdf(S, plan, chart) {
+  function reportCoverDetails(S, plan) {
+    const url = ((plan && plan.requests) || []).map(r => String(r && r.url || '').trim()).find(Boolean) || '';
+    let domain = '';
+    try { domain = new URL(url).hostname; } catch {}
+    if (!domain && S && S.cfg && S.cfg.targets && S.cfg.targets.length) domain = String(S.cfg.targets[0]);
+    const date = new Date(S && S.date);
+    const dateTime = Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('en-GB', {
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+    return { domain: domain || '-', dateTime, url: url || '-', tool: 'PerfPilot' };
+  }
+
+  function reportCoverScale(width, height) {
+    return { x: width / 552, y: height / 752 };
+  }
+
+  function reportEndingDetails(S, domain) {
+    const avg = Number(S && S.avg) || 0;
+    const total = Number(S && S.total) || 0;
+    const ok = Number(S && S.ok) || 0;
+    const errors = S && S.breakdown && S.breakdown.byError || [];
+    const timedOut = errors.filter(e => /time(?:d?\s*out|out)/i.test(e.label || '')).reduce((n, e) => n + (Number(e.count) || 0), 0);
+    return {
+      domain: domain || (S && S.cfg && S.cfg.targets && S.cfg.targets[0]) || '-',
+      users: String(Number(S && S.threads) || 0),
+      average: `${(avg / 1000).toFixed(2)}s`,
+      successRate: `${(total ? ok / total * 100 : 0).toFixed(2)}%`,
+      total: String(total),
+      successful: String(ok),
+      failed: String(Math.max(0, total - ok)),
+      timedOut: String(timedOut),
+      p95: Number(S && S.p95) || 0,
+      duration: Math.max(1, Number(S && S.secs) || 0),
+      series: (S && S.series || []).map(bucket => [
+        Number(bucket[0]) || 0,
+        Number(bucket[1]) || 0,
+        Number(bucket[2]) || 0,
+        Number(bucket[3]) || 0
+      ])
+    };
+  }
+
+  function buildPdf(S, plan, chart, cover, ending) {
     const navy = '#0f2744', cyan = '#1aa3e8', muted = '#6b7280', ink = '#1f2937', rule = '#e5e7eb', M = 48, CW = PW - 2 * M;
     const cfg = S.cfg || { rampUp: plan.rampUp, mode: plan.mode, loops: plan.loops, duration: plan.duration, think: plan.think, thinkMax: plan.thinkMax, cookies: plan.cookies, targets: [] };
     const targets = (cfg.targets && cfg.targets.length) ? cfg.targets : [...new Set(plan.requests.map(r => { try { return new URL(r.url.replace(/\$\{[^}]*\}/g, 'x')).host; } catch { return r.url; } }))].filter(Boolean);
@@ -55,21 +103,26 @@
 
     // ---- cover page
     const c = new Page(); pages.push(c);
-    c.rect(0, 0, PW, PH, { fill: navy });
-    c.poly([[48, 40], [66, 40], [66, 52], [57, 62], [48, 52]], { stroke: cyan, lw: 1.6 });
-    c.poly([[51, 50], [55, 50], [57, 45], [60, 55], [62, 50], [64, 50]], { stroke: '#ffffff', lw: 1.2, close: false });
-    c.text('ConfixHub', 78, 57, { size: 17, bold: true, color: '#ffffff' });
-    c.text('Performance Testing', M, 205, { size: 11, color: '#7f9bbd' });
-    c.text('Performance Report', M, 245, { size: 34, bold: true, color: '#ffffff' });
-    c.rect(M, 262, 96, 3, { fill: cyan });
-    c.text((S.name || 'Test plan').toUpperCase(), M, 296, { size: 11, bold: true, color: '#ffffff', maxW: CW });
-    c.text('Target: ' + (targets.join(', ') || '-'), M, 316, { size: 9.5, color: '#9fb3cc', maxW: CW });
-    c.text('Generated: ' + when, M, 332, { size: 9.5, color: '#9fb3cc' });
-    c.text(`${S.threads} users, ${S.total} requests`, M, 348, { size: 9.5, color: '#9fb3cc' });
-    c.rect(48, 640, 150, 134, { fill: '#1b5fc4', r: 8 });
-    c.rect(48, 628, 62, 24, { fill: '#1b5fc4', r: 6 });
-    c.rect(86, 680, 170, 94, { fill: '#2f88e6', r: 8 });
-    c.rect(0, PH - 7, PW, 7, { fill: '#e5254f' });
+    if (cover) {
+      const width = PH * cover.w / cover.h;
+      c.image((PW - width) / 2, 0, width, PH, 'ImCover');
+    } else {
+      c.rect(0, 0, PW, PH, { fill: navy });
+      c.poly([[48, 40], [66, 40], [66, 52], [57, 62], [48, 52]], { stroke: cyan, lw: 1.6 });
+      c.poly([[51, 50], [55, 50], [57, 45], [60, 55], [62, 50], [64, 50]], { stroke: '#ffffff', lw: 1.2, close: false });
+      c.text('ConfixHub', 78, 57, { size: 17, bold: true, color: '#ffffff' });
+      c.text('Performance Testing', M, 205, { size: 11, color: '#7f9bbd' });
+      c.text('Performance Report', M, 245, { size: 34, bold: true, color: '#ffffff' });
+      c.rect(M, 262, 96, 3, { fill: cyan });
+      c.text((S.name || 'Test plan').toUpperCase(), M, 296, { size: 11, bold: true, color: '#ffffff', maxW: CW });
+      c.text('Target: ' + (targets.join(', ') || '-'), M, 316, { size: 9.5, color: '#9fb3cc', maxW: CW });
+      c.text('Generated: ' + when, M, 332, { size: 9.5, color: '#9fb3cc' });
+      c.text(`${S.threads} users, ${S.total} requests`, M, 348, { size: 9.5, color: '#9fb3cc' });
+      c.rect(48, 640, 150, 134, { fill: '#1b5fc4', r: 8 });
+      c.rect(48, 628, 62, 24, { fill: '#1b5fc4', r: 6 });
+      c.rect(86, 680, 170, 94, { fill: '#2f88e6', r: 8 });
+      c.rect(0, PH - 7, PW, 7, { fill: '#e5254f' });
+    }
 
     // ---- content pages
     let pg, y;
@@ -157,7 +210,7 @@
     bullet('Endpoint: the HTTP method and URL that each row of the detailed table (section 5) was sent to.', 4);
     y += 8;
 
-    h2('2  At a glance');
+    ensure(210); h2('2  At a glance');
     const cx = M + 52, cy = y + 56, R = 46, okFrac = S.total ? S.ok / S.total : 0;
     const slice = (a0, a1, col) => { const pts = [[cx, cy]]; const n = Math.max(2, Math.ceil((a1 - a0) / (Math.PI / 30))); for (let i = 0; i <= n; i++) { const a = a0 + (a1 - a0) * i / n; pts.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]); } pg.poly(pts, { fill: col }); };
     const A0 = -Math.PI / 2;
@@ -187,26 +240,44 @@
 
     const endpoint = r => (r.url ? (r.method || 'GET') + '  ' + r.url : '');
     const P = (S.pctls && S.pctls.length) ? S.pctls.slice(0, 4) : [90, 95];
-    const pctW = Math.floor((CW - 346 - 46) / P.length);
-    const cols = [['Request / endpoint', 196, 'left'], ['Samples', 42, 'right'], ['Avg ms', 40, 'right'], ['Min', 34, 'right'], ['Max', 34, 'right']]
+    const pctW = 42, errW = 38, nameW = CW - 40 - 38 - 32 - 36 - errW - pctW * P.length;
+    const cols = [['Request / endpoint', nameW, 'left'], ['Samples', 40, 'right'], ['Avg ms', 38, 'right'], ['Min', 32, 'right'], ['Max', 36, 'right']]
       .concat(P.map(p => ['P' + p, pctW, 'right']))
-      .concat([['Err %', CW - 346 - pctW * P.length, 'right']]);
+      .concat([['Err %', errW, 'right']]);
     const errK = cols.length - 1;
-    const head = () => { ensure(24); pg.rect(M, y - 12, CW, 19, { fill: navy }); let x = M; cols.forEach(([l, w, al]) => { pg.text(l, al === 'right' ? x + w - 8 : x + 8, y + 2, { size: 8.5, bold: true, color: '#ffffff', align: al }); x += w; }); y += 20; };
+    const head = () => { ensure(24); pg.rect(M, y - 12, CW, 19, { fill: navy }); let x = M; cols.forEach(([l, w, al]) => { pg.text(l, al === 'right' ? x + w - 5 : x + 8, y + 2, { size: 8.5, bold: true, color: '#ffffff', align: al }); x += w; }); y += 20; };
     ensure(110); h2('5  Detailed results (for engineers)');
     writeLines('Every endpoint that was called is listed below. Endpoint = the HTTP method and full URL. Samples = how many requests were sent to it. Avg / Min / Max = response time in milliseconds. Each Pxx column is the time that xx% of its requests finished within. Err % = the share of its requests that failed.', 6);
     head();
-    S.rows.forEach((r, i) => { if (y + 27 > 790) { newPage(false); head(); }
-      if (i % 2 === 0) pg.rect(M, y - 13, CW, 27, { fill: '#f8fafc' });
+    S.rows.forEach((r, i) => { const ep = endpoint(r), urlW = cols[0][1] - 14, epLines = []; let rest = clean(ep);
+      while (rest) { let n = rest.length; while (n > 1 && tw(rest.slice(0, n), 7.5, false) > urlW) n--; epLines.push(rest.slice(0, n)); rest = rest.slice(n); }
+      const rh = 27 + Math.max(0, epLines.length - 1) * 9;
+      if (y + rh > 790) { newPage(false); head(); }
+      if (i % 2 === 0) pg.rect(M, y - 13, CW, rh, { fill: '#f8fafc' });
       const vals = [r.name, String(r.n), r.n ? r.avg.toFixed(0) : '-', r.n ? r.min.toFixed(0) : '-', r.n ? r.max.toFixed(0) : '-']
         .concat(P.map((_, k) => (r.n && r.pcts && r.pcts[k] != null) ? r.pcts[k].toFixed(0) : '-'))
         .concat([r.n ? r.err.toFixed(1) : '-']);
-      let x = M; cols.forEach(([, w, al], k) => { pg.text(vals[k], al === 'right' ? x + w - 8 : x + 8, y, { size: 8.5, color: k === errK && r.err > 0 ? '#dc2626' : ink, align: al, maxW: w - 14 }); x += w; });
-      const ep = endpoint(r); if (ep) pg.text(ep, M + 8, y + 11, { size: 7.5, color: muted, maxW: cols[0][1] - 14 });
-      y += 27; });
+      let x = M; cols.forEach(([, w, al], k) => { pg.text(vals[k], al === 'right' ? x + w - 5 : x + 8, y, { size: 8.5, color: k === errK && r.err > 0 ? '#dc2626' : ink, align: al, maxW: k === 0 ? w - 14 : w - 8 }); x += w; });
+      epLines.forEach((l, j) => pg.text(l, M + 8, y + 11 + j * 9, { size: 7.5, color: muted }));
+      y += rh; });
 
-    pages.forEach((p, i) => { if (!i) return; p.rect(M, 806, CW, 0.8, { fill: rule }); p.text('ConfixHub  |  PerfPilot performance test report', M, 824, { size: 8, color: muted }); p.text(`Page ${i + 1} of ${pages.length}`, M + CW, 824, { size: 8, color: muted, align: 'right' }); });
-    return serialize(pages, chart);
+    let endingPage;
+    if (ending) {
+      endingPage = new Page();
+      const width = PH * ending.w / ending.h;
+      endingPage.image((PW - width) / 2, 0, width, PH, 'ImEnding');
+      pages.push(endingPage);
+    }
+    pages.forEach((p, i) => { if (!i || p === endingPage) return; p.rect(M, 806, CW, 0.8, { fill: rule }); p.text('ConfixHub  |  PerfPilot performance test report', M, 824, { size: 8, color: muted }); p.text(`Page ${i + 1} of ${pages.length}`, M + CW, 824, { size: 8, color: muted, align: 'right' }); });
+    const images = {};
+    if (chart) images.Im1 = chart;
+    if (cover) images.ImCover = cover;
+    if (ending) images.ImEnding = ending;
+    return serialize(pages, images);
   }
-  root.buildPdf = buildPdf; if (typeof module !== 'undefined') module.exports = { buildPdf };
+  root.buildPdf = buildPdf;
+  root.reportCoverDetails = reportCoverDetails;
+  root.reportCoverScale = reportCoverScale;
+  root.reportEndingDetails = reportEndingDetails;
+  if (typeof module !== 'undefined') module.exports = { buildPdf, reportCoverDetails, reportCoverScale, reportEndingDetails };
 })(typeof window !== 'undefined' ? window : globalThis);

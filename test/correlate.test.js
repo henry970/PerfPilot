@@ -127,3 +127,16 @@ test('applyCorrelation rewrites a raw token with a plain placeholder', () => {
   assert.equal(plan[0].extract, 'Authorization = auto');
   assert.equal(plan[1].headers, 'Authorization: Bearer ${Authorization}');
 });
+test('turns a recorded Authorization header into a reusable variable', () => {
+  const { authToVariable } = require('../correlate.js');
+  const reqs = [
+    { headers: 'Content-Type: application/json\nAuthorization: Bearer abc123def456ghi' },
+    { headers: 'authorization: Bearer abc123def456ghi' },
+    { headers: 'Accept: */*' }
+  ];
+  const a = authToVariable(reqs);
+  assert.deepEqual(a, { name: 'auth_token', value: 'abc123def456ghi' });
+  assert.equal(reqs[0].headers, 'Content-Type: application/json\nAuthorization: Bearer ${auth_token}');
+  assert.equal(reqs[1].headers, 'authorization: Bearer ${auth_token}');
+  assert.equal(authToVariable(reqs), null);
+});

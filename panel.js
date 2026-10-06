@@ -140,6 +140,20 @@ async function user(n,end,base,rows){
   active--;
 }
 
+// Requests sent from the extension carry "Origin: chrome-extension://...", which many servers reject on
+// POST/PUT/DELETE (CSRF/CORS checks) even though the same GET works. Present the site's own origin instead.
+async function setOriginRules(vars){
+  const origins=new Map();
+  plan.requests.forEach(r=>{ try{ const u=new URL(subst(r.url,vars).trim()); origins.set(u.hostname,u.origin); }catch{} });
+  const old=(await chrome.declarativeNetRequest.getSessionRules()).map(x=>x.id);
+  const addRules=[...origins].map(([host,origin],i)=>({id:i+1,priority:1,
+    action:{type:'modifyHeaders',requestHeaders:[{header:'origin',operation:'set',value:origin},{header:'referer',operation:'set',value:origin+'/'}]},
+    condition:{requestDomains:[host],resourceTypes:['xmlhttprequest'],tabIds:[-1]}}));
+  await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:old,addRules});
+}
+async function clearOriginRules(){
+  try{ const old=(await chrome.declarativeNetRequest.getSessionRules()).map(x=>x.id); await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:old}); }catch{}
+}
 async function start(){
   readForm();
   if(!$('#auth').checked) return needAuth();
@@ -148,9 +162,10 @@ async function start(){
   running=true; results=[]; lastLog=[]; t0=Date.now(); active=0; tick=0;
   $('#start').disabled=true; $('#stop').hidden=false; $('#results').scrollIntoView({behavior:'smooth'}); log(`Started "${plan.name}" with ${plan.threads} users.`);
   const end=t0+(plan.duration+plan.rampUp)*1000, base=parseVars(plan.vars), rows=parseCsv(plan.data);
+  try{ await setOriginRules(base); }catch(e){ log('Could not set the Origin header: '+(e.message||e)); }
   const timer=setInterval(()=>{ if(results.length<50000||++tick%4===0) show(summarize()); },500);
   await Promise.all(Array.from({length:plan.threads},(_,n)=>user(n,end,base,rows)));
-  clearInterval(timer); log(running?'Test complete.':'Test stopped.'); running=false;
+  clearInterval(timer); await clearOriginRules(); log(running?'Test complete.':'Test stopped.'); running=false;
   const S=summarize(true); show(S); if(S.total) pushHistory(S);
   $('#start').disabled=false; $('#stop').hidden=true;
 }
@@ -162,9 +177,9 @@ function summarize(final){
   const n=results.length, ok=results.filter(r=>r.ok).length, ms=results.map(r=>r.ms).sort((a,b)=>a-b), el=t0?Math.max(1,(Date.now()-t0)/1000):1;
   const rows=plan.requests.map((r,i)=>{ const rs=results.filter(x=>x.idx===i), m=rs.map(x=>x.ms).sort((a,b)=>a-b), f=rs.filter(x=>!x.ok).length;
     return {name:r.name,method:r.method,url:r.url,n:rs.length,avg:avg(m),min:m[0]??0,max:m[m.length-1]??0,pcts:P.map(p=>pct(m,p)),err:rs.length?f/rs.length*100:0}; });
-  const secs=Math.min(21600,Math.max(1,Math.ceil(el))), B=Array.from({length:secs+1},()=>[0,0,0]);
-  results.forEach(r=>{ const b=B[Math.min(secs,Math.floor((r.t-t0)/1000))]; if(b){ b[1]++; b[0]+=r.ms; if(!r.ok) b[2]++; } });
-  let series=B.map(b=>[b[1]?b[0]/b[1]:0,b[1],b[2]]); if(series.length>900){ const k=Math.ceil(series.length/900); series=series.filter((_,i)=>i%k===0); }
+  const secs=Math.min(21600,Math.max(1,Math.ceil(el))), B=Array.from({length:secs+1},()=>[0,0,0,[]]);
+  results.forEach(r=>{ const b=B[Math.min(secs,Math.floor((r.t-t0)/1000))]; if(b){ b[1]++; b[0]+=r.ms; if(final) b[3].push(r.ms); if(!r.ok) b[2]++; } });
+  let series=B.map(b=>[b[1]?b[0]/b[1]:0,b[1],b[2],b[3].length?pct(b[3].sort((a,b)=>a-b),95):0]); if(series.length>900){ const k=Math.ceil(series.length/900); series=series.filter((_,i)=>i%k===0); }
   const targets=[...new Set(plan.requests.map(r=>{ try{ return new URL(r.url.replace(/\$\{[^}]*\}/g,'x')).host; }catch{ return r.url; } }))].filter(Boolean);
   const S={id:Date.now(),name:plan.name,cfg:{rampUp:plan.rampUp,mode:plan.mode,loops:plan.loops,duration:plan.duration,think:plan.think,thinkMax:plan.thinkMax,cookies:plan.cookies,targets},date:new Date().toISOString(),threads:plan.threads,secs:el,active,total:n,ok,failed:n-ok,avg:avg(ms),p95:pct(ms,95),
     thr:(final?n/el:results.filter(r=>r.t>Date.now()-5000).length/Math.min(5,el)),errRate:n?(n-ok)/n*100:0,rows,series,pctls:P,pcts:P.map(p=>pct(ms,p)),breakdown:breakdown(results)};
@@ -246,13 +261,144 @@ function correlate(){
 }
 $('#correlate').onclick=()=>{ const c=correlate(); save(); renderReqs();
   notice(c?`Linked "${c.name}" from request ${c.producer+1} into ${c.consumers.length} later request(s). It is refreshed on every run - ideal for login tokens.`:'No reusable login token was found. Add one manually in "Extract variables", e.g. token = auto.',!!c); };
-$('#report').onclick=()=>{
+const REPORT_DARK='#08111f', REPORT_CARD='#0b1523';
+function paintReportCover(ctx,details,width,height){
+  const {x:sx,y:sy}=reportCoverScale(width,height);
+  const rows=[[434,details.domain],[494,details.dateTime],[613,details.tool]];
+  ctx.textBaseline='alphabetic'; ctx.textAlign='left';
+  rows.forEach(([y,text],i)=>{
+    const maxW=i===2?125:215;
+    ctx.fillStyle=REPORT_DARK; ctx.fillRect(118*sx,(y-17)*sy,(maxW+8)*sx,25*sy);
+    ctx.fillStyle='#fff'; ctx.font=`700 ${14*sy}px Arial, sans-serif`;
+    ctx.fillText(text,123*sx,y*sy,maxW*sx);
+  });
+  const maxW=215*sx;
+  ctx.fillStyle=REPORT_DARK; ctx.fillRect(118*sx,534*sy,223*sx,38*sy);
+  ctx.fillStyle='#fff'; ctx.font=`700 ${12*sy}px Arial, sans-serif`;
+  const lines=[]; let line='';
+  details.url.split(/(?<=[/?.&=_-])/).forEach(word=>{
+    const next=line+word;
+    if(line&&ctx.measureText(next).width>maxW){ lines.push(line); line=word; }
+    else line=next;
+  });
+  if(line) lines.push(line);
+  if(lines.length>2){
+    lines.length=2;
+    let last=lines[1];
+    while(last.length&&ctx.measureText(last+'...').width>maxW) last=last.slice(0,-1);
+    lines[1]=last+'...';
+  }
+  lines.forEach((text,i)=>ctx.fillText(text,123*sx,(lines.length>1?548+i*14:553)*sy,maxW));
+}
+function paintReportEnding(ctx,details,width,height){
+  const {x:sx,y:sy}=reportCoverScale(width,height);
+  ctx.textBaseline='alphabetic'; ctx.textAlign='left';
+  ctx.fillStyle=REPORT_DARK; ctx.fillRect(36*sx,194*sy,490*sx,26*sy);
+  ctx.fillStyle='#e5e7eb'; ctx.font=`${14.5*sy}px Arial, sans-serif`;
+  ctx.fillText(`The performance test has been completed successfully for ${details.domain}.`,40*sx,211*sy,480*sx);
+  const cards=[[81,details.average,'#171c2c'],[212,details.users,'#091f27'],[343,details.successRate,'#0b192c'],[474,details.total,'#0f192b']];
+  ctx.textAlign='center';
+  cards.forEach(([cx,value,fill])=>{
+    ctx.fillStyle=fill; ctx.fillRect((cx-52)*sx,288*sy,104*sx,26*sy);
+    ctx.fillStyle='#fff'; ctx.font=`700 ${19*sy}px Arial, sans-serif`;
+    ctx.fillText(value,cx*sx,309*sy,100*sx);
+  });
+
+  const series=details.series, chart=(box,dataMax,label)=>{
+    const {x,y,w,h,left,right}=box;
+    ctx.fillStyle=REPORT_CARD; ctx.fillRect(left*sx,408*sy,(right-left)*sx,104*sy);
+    ctx.strokeStyle='#1c2b40'; ctx.lineWidth=Math.max(1,sx);
+    ctx.font=`${10.5*sy}px Arial, sans-serif`; ctx.fillStyle='#cbd5e1'; ctx.textAlign='right';
+    for(let i=0;i<=2;i++){
+      const gy=y+h-h*i/2;
+      ctx.beginPath(); ctx.moveTo(x*sx,gy*sy); ctx.lineTo((x+w)*sx,gy*sy); ctx.stroke();
+      ctx.fillText(label(dataMax*i/2),(x-8)*sx,(gy+4)*sy,34*sx);
+    }
+    ctx.textAlign='left'; ctx.fillText('0s',x*sx,503*sy,35*sx);
+    ctx.textAlign='right'; ctx.fillText(`${Math.round(details.duration)}s`,(x+w)*sx,503*sy,40*sx);
+    return {x,y,w,h,max:Math.max(1,dataMax)};
+  };
+  const points=(p,values,color)=>{
+    if(values.length<2) return;
+    ctx.strokeStyle=color; ctx.lineWidth=2*sx; ctx.lineJoin='round'; ctx.lineCap='round';
+    let drawing=false;
+    values.forEach((v,i)=>{
+      if(v==null||!Number.isFinite(v)){ if(drawing) ctx.stroke(); drawing=false; return; }
+      const px=(p.x+i*p.w/(values.length-1))*sx, py=(p.y+p.h-Math.min(v,p.max)/p.max*p.h)*sy;
+      if(!drawing){ ctx.beginPath(); ctx.moveTo(px,py); drawing=true; } else ctx.lineTo(px,py);
+    });
+    if(drawing) ctx.stroke();
+  };
+  const avgValues=series.map(b=>b[1]>0?b[0]:null);
+  const p95Values=series.map(b=>b[1]>0?(b[3]||details.p95):null);
+  const maxTime=Math.max(1,...avgValues,...p95Values)*1.1;
+  const responsePlot=chart({x:60,y:422,w:208,h:66,left:24,right:276},maxTime,v=>`${(v/1000).toFixed(1)}s`);
+  points(responsePlot,avgValues,'#12c98a');
+  points(responsePlot,p95Values,'#ff8a1f');
+  ctx.font=`${10*sy}px Arial, sans-serif`; ctx.textAlign='left';
+  ctx.fillStyle='#12c98a'; ctx.fillText('Avg',(responsePlot.x+responsePlot.w-62)*sx,418*sy);
+  ctx.fillStyle='#ff8a1f'; ctx.fillText('P95',(responsePlot.x+responsePlot.w-30)*sx,418*sy);
+
+  const rps=series.map(b=>b[1]), maxRps=Math.max(1,...rps);
+  const throughputPlot=chart({x:340,y:422,w:188,h:66,left:297,right:532},maxRps*1.15,v=>String(Math.round(v)));
+  if(rps.length){
+    const bars=Math.min(rps.length,40), stride=Math.ceil(rps.length/bars), count=Math.ceil(rps.length/stride);
+    const slot=throughputPlot.w*sx/count, barW=Math.max(1,slot*.65);
+    ctx.fillStyle='#12c98a';
+    for(let i=0;i<count;i++){
+      const value=Math.max(...rps.slice(i*stride,i*stride+stride)), barH=value/throughputPlot.max*throughputPlot.h*sy;
+      ctx.fillRect(throughputPlot.x*sx+i*slot,(throughputPlot.y+throughputPlot.h)*sy-barH,barW,barH);
+    }
+  }
+
+  const cx=85*sx,cy=632*sy,r=51*sx,total=Number(details.total)||0;
+  const success=Number(details.successful)||0,failed=Number(details.failed)||0,timedOut=Number(details.timedOut)||0;
+  ctx.fillStyle=REPORT_CARD; ctx.fillRect(26*sx,578*sy,118*sx,108*sy);
+  ctx.fillRect(254*sx,590*sy,44*sx,78*sy);
+  const slice=(from,count,color)=>{
+    if(!count) return;
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,from,from+count/total*Math.PI*2); ctx.closePath(); ctx.fillStyle=color; ctx.fill();
+  };
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fillStyle='#1c2b40'; ctx.fill();
+  if(total){
+    const start=-Math.PI/2;
+    slice(start,success,'#12c98a');
+    slice(start+success/total*Math.PI*2,failed,'#ff8a1f');
+    slice(start+(success+failed)/total*Math.PI*2,timedOut,'#ef3b2d');
+  }
+  ctx.beginPath(); ctx.arc(cx,cy,r*.7,0,Math.PI*2); ctx.fillStyle=REPORT_CARD; ctx.fill();
+  ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.font=`700 ${16*sy}px Arial, sans-serif`;
+  ctx.fillText(details.successRate,cx,cy+sy,66*sx);
+  ctx.fillStyle='#cbd5e1'; ctx.font=`${11*sy}px Arial, sans-serif`;
+  ctx.fillText('Success',cx,cy+17*sy,60*sx);
+  ctx.textAlign='right'; ctx.fillStyle='#fff'; ctx.font=`600 ${12*sy}px Arial, sans-serif`;
+  [[details.successful,608],[details.failed,634],[details.timedOut,660]].forEach(([value,y])=>ctx.fillText(value,291*sx,y*sy,36*sx));
+}async function loadReportImage(filename,label,coverDetails,endingDetails){
+  const res=await fetch(chrome.runtime.getURL(`assets/${filename}`));
+  if(!res.ok) throw new Error(`Could not load the ${label} (${res.status}).`);
+  const bitmap=await createImageBitmap(await res.blob()), canvas=document.createElement('canvas');
+  canvas.width=bitmap.width*2; canvas.height=bitmap.height*2;
+  const ctx=canvas.getContext('2d');
+  if(!ctx){ bitmap.close(); throw new Error('Could not prepare the report cover image.'); }
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.imageSmoothingQuality='high'; ctx.drawImage(bitmap,0,0,canvas.width,canvas.height); bitmap.close();
+  if(coverDetails) paintReportCover(ctx,coverDetails,canvas.width,canvas.height);
+  if(endingDetails) paintReportEnding(ctx,endingDetails,canvas.width,canvas.height);
+  const bin=atob(canvas.toDataURL('image/jpeg',.94).split(',')[1]);
+  return {data:bin,w:canvas.width,h:canvas.height};
+}
+$('#report').onclick=async()=>{
   if(!shown) return notice('Run a test before exporting a report.');
   try{
     const c=$('#chart'), t=document.createElement('canvas'); t.width=c.width; t.height=c.height;
     const g=t.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,t.width,t.height); g.drawImage(c,0,0);
     const bin=atob(t.toDataURL('image/jpeg',.92).split(',')[1]);
-    download((shown.name||'report').replace(/[^\w-]+/g,'_')+'-report.pdf','application/pdf',buildPdf(shown,plan,{data:bin,w:t.width,h:t.height}));
+    const vars={...parseVars(plan.vars),...(parseCsv(plan.data)[0]||{})};
+    const coverPlan={...plan,requests:plan.requests.map(r=>({...r,url:subst(r.url,vars)}))};
+    const coverDetails=reportCoverDetails(shown,coverPlan);
+    const cover=await loadReportImage('report-cover.png','report cover',coverDetails);
+    const endingDetails=reportEndingDetails(shown,coverDetails.domain);
+    const ending=await loadReportImage('report-ending.png','report ending page',null,endingDetails);
+    download((shown.name||'report').replace(/[^\w-]+/g,'_')+'-report.pdf','application/pdf',buildPdf(shown,plan,{data:bin,w:t.width,h:t.height},cover,ending));
     notice('PDF report downloaded.',true);
   }catch(e){ notice('Could not create the PDF: '+(e.message||e)); }
 };
@@ -295,10 +441,11 @@ function onRecHeaders(d){
   if(!rec.statics&&!['xmlhttprequest','main_frame','sub_frame'].includes(d.type)) return;
   if(rec.firstParty){ let host=''; try{ host=new URL(d.url).hostname; }catch{} if(!sameSite(host,rec.host)) return; }
   if(rec.ignore&&rec.ignore.length&&rec.ignore.some(p=>d.url.toLowerCase().includes(p))) return;
-  const key=d.method+' '+d.url; if(rec.items.some(i=>i.key===key)) return;
+  const key=d.method+' '+d.url, body=recBodies.get(d.requestId)||'';
+  if(rec.items.some(i=>i.key===key&&(i.body||'')===body)) return;
   const headers=(d.requestHeaders||[]).filter(h=>!DROP.test(h.name)).map(h=>`${h.name}: ${h.value}`).join('\n');
   let path=d.url; try{ const u=new URL(d.url); path=u.pathname.split('/').filter(Boolean).pop()||u.hostname; }catch{}
-  rec.items.push({key,name:`${d.method} ${path}`.slice(0,60),method:d.method,url:d.url,headers,body:recBodies.get(d.requestId)||''}); recBodies.delete(d.requestId);
+  rec.items.push({key,name:`${d.method} ${path}`.slice(0,60),method:d.method,url:d.url,headers,body}); recBodies.delete(d.requestId);
   chrome.storage.session.set({rec}); chrome.action.setBadgeText({text:String(rec.items.length)}); renderRec();
 }
 function attachRec(){ detachRec(); const f={urls:REC_URLS,tabId:rec.tabId};
@@ -320,7 +467,10 @@ async function stopRec(){
   detachRec(); const items=(rec?.items||[]).map(({key,...r})=>({...newReq(1),...r,recorded:true}));
   await chrome.storage.session.remove('rec'); await chrome.action.setBadgeText({text:''}); rec=null;
   if(items.length){ plan.requests=plan.requests.length===1&&!plan.requests[0].url?items:plan.requests.concat(items); }
-  const c=items.length?correlate():null; save();
+  const c=items.length?correlate():null;
+  const a=items.length?authToVariable(plan.requests):null;
+  if(a&&!parseVars(plan.vars)[a.name]) plan.vars=(plan.vars.trim()?plan.vars.trim()+'\n':'')+`${a.name}=${a.value}`;
+  save(); fillForm();
   setView('full'); renderReqs();
   if(items.length) notice(`Imported ${items.length} recorded requests${c?` - linked the "${c.name}" token so it is reused automatically`:' - if a login is failing, press "Reuse login token" to link its CSRF/auth token'}.`,true); else notice('No requests were captured. Make sure you browsed the recorded tab while recording.');
 }

@@ -128,8 +128,29 @@
     return c;
   }
 
+  // Turns a hard-coded Authorization header (recorded from the browser, so it expires) into a
+  // plan variable and points every request that carried it at ${name}. The scheme (Bearer/Basic/...)
+  // stays in the header. Returns { name, value } or null when there is nothing to replace.
+  const AUTH_LINE = /^(\s*authorization\s*:\s*(?:(?:Bearer|Basic|Token|JWT)\s+)?)(\S.*?)\s*$/i;
+  function authToVariable(requests, name = 'auth_token') {
+    const lines = r => String(r.headers || '').split('\n');
+    const read = l => AUTH_LINE.exec(l.replace(/\r$/, ''));
+    let value = null;
+    for (const r of requests || []) {
+      for (const l of lines(r)) { const m = read(l); if (m && !m[2].includes('${')) { value = m[2]; break; } }
+      if (value) break;
+    }
+    if (!value) return null;
+    for (const r of requests) {
+      if (!r.headers) continue;
+      r.headers = lines(r).map(l => { const m = read(l); return m && m[2] === value ? m[1] + '${' + name + '}' : l; }).join('\n');
+    }
+    return { name, value };
+  }
+
   root.pickToken = pickToken;
   root.detectCorrelation = detectCorrelation;
   root.applyCorrelation = applyCorrelation;
-  if (typeof module !== 'undefined') module.exports = { pickToken, detectCorrelation, applyCorrelation };
+  root.authToVariable = authToVariable;
+  if (typeof module !== 'undefined') module.exports = { pickToken, detectCorrelation, applyCorrelation, authToVariable };
 })(typeof window !== 'undefined' ? window : globalThis);

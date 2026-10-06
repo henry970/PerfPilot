@@ -1,1 +1,3 @@
 # PerfPilot
+
+PDF reports use the performance-test artwork in `assets/report-cover.png` as their first page and the completed-test summary artwork in `assets/report-ending.png` as their final page; detailed performance results appear between them. The first page shows the target domain, run date and time, website URL, and PerfPilot as the test tool. The final page shows the target domain, average response time, virtual users, success rate, total requests, and successful, failed, and timed-out request counts from that run.

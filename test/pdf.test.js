@@ -2,7 +2,7 @@
 // Unit tests for the dependency-free PDF writer (pdf.js). Run with: node --test test/
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildPdf } = require('../pdf.js');
+const { buildPdf, reportCoverDetails, reportCoverScale, reportEndingDetails } = require('../pdf.js');
 
 function summary(over = {}) {
   return Object.assign({
@@ -34,6 +34,78 @@ function plan() {
   return { name: 'My test plan', rampUp: 5, mode: 'duration', loops: 10, duration: 30, think: 0, thinkMax: 0, cookies: true, requests: [{ url: 'https://example.com/' }] };
 }
 const text = u => Buffer.from(u).toString('latin1');
+
+test('extracts the cover domain, date and website URL from the report', () => {
+  const details = reportCoverDetails(summary(), plan());
+  assert.equal(details.domain, 'example.com');
+  assert.equal(details.url, 'https://example.com/');
+  assert.equal(details.dateTime, new Date(summary().date).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+  }));
+  assert.equal(details.tool, 'PerfPilot');
+});
+
+test('uses a summary target when no request URL is available', () => {
+  const details = reportCoverDetails(summary(), { requests: [] });
+  assert.equal(details.domain, 'example.com');
+  assert.equal(details.url, '-');
+});
+
+test('scales cover overlays against the actual cover image dimensions', () => {
+  assert.deepEqual(reportCoverScale(552, 752), { x: 1, y: 1 });
+});
+
+test('extracts virtual users, average response and success rate for the ending page', () => {
+  assert.deepEqual(reportEndingDetails(summary()), {
+    domain: 'example.com',
+    users: '10',
+    average: '0.12s',
+    successRate: '98.00%',
+    total: '100',
+    successful: '98',
+    failed: '2',
+    timedOut: '0',
+    p95: 300.2,
+    duration: 30,
+    series: []
+  });
+});
+
+test('formats long response times and handles an empty run on the ending page', () => {
+  assert.deepEqual(reportEndingDetails(summary({ avg: 1200, total: 0, ok: 0 })), {
+    domain: 'example.com',
+    users: '10',
+    average: '1.20s',
+    successRate: '0.00%',
+    total: '0',
+    successful: '0',
+    failed: '0',
+    timedOut: '0',
+    p95: 300.2,
+    duration: 30,
+    series: []
+  });
+});
+
+test('includes real bucketed timing, throughput and error data on the ending page', () => {
+  const details = reportEndingDetails(summary({
+    series: [[100, 3, 1, 180], [200, 5, 0, 350]]
+  }));
+  assert.deepEqual(details.series, [[100, 3, 1, 180], [200, 5, 0, 350]]);
+});
+
+test('counts timeout failures separately for the ending summary', () => {
+  const details = reportEndingDetails(summary({
+    breakdown: {
+      byError: [
+        { label: 'timeout', count: 2 },
+        { label: 'timed out', count: 1 },
+        { label: 'status 500', count: 3 }
+      ]
+    }
+  }));
+  assert.equal(details.timedOut, '3');
+});
 
 test('returns a PDF byte stream', () => {
   const out = buildPdf(summary(), plan(), null);
@@ -103,7 +175,8 @@ test('shows the endpoint (method + url) for every request', () => {
   const s = text(buildPdf(summary(), plan(), null));
   assert.ok(s.includes('Request / endpoint'));
   assert.ok(s.includes('GET  https://example.com/home'));
-  assert.ok(s.includes('GET  https://example.com/search?q=shoes'));
+  assert.ok(s.includes('GET  https://example.com/search?q=sh'));
+  assert.ok(s.includes('(oes)'));
 });
 
 test('explains the report in plain language', () => {
@@ -168,6 +241,29 @@ test('embeds the chart image when one is supplied', () => {
   assert.ok(s.includes('/Width 720'));
   assert.ok(s.includes('/Height 300'));
   assert.ok(s.includes('How the load behaved over time'));
+});
+
+test('uses the supplied image as the full-page PDF cover', () => {
+  const cover = { data: 'cover-image-data', w: 768, h: 1152 };
+  const s = text(buildPdf(summary(), plan(), null, cover));
+  assert.ok(s.includes('/Subtype /Image'));
+  assert.ok(s.includes('/Width 768'));
+  assert.ok(s.includes('/Height 1152'));
+  assert.ok(s.includes('/ImCover Do'));
+  assert.ok(s.includes('stream\ncover-image-data\nendstream'));
+  assert.ok(!s.includes('Performance Report'));
+});
+
+test('adds the supplied image as the final PDF page', () => {
+  const ending = { data: 'ending-image-data', w: 768, h: 1152 };
+  const s = text(buildPdf(summary(), plan(), null, null, ending));
+  assert.ok(s.includes('/Width 768'));
+  assert.ok(s.includes('/Height 1152'));
+  assert.ok(s.includes('/ImEnding Do'));
+  assert.ok(s.includes('stream\nending-image-data\nendstream'));
+  const pageStreams = [...s.matchAll(/<< \/Length \d+ >>\nstream\n([\s\S]*?)\nendstream/g)].map(m => m[1]);
+  assert.match(pageStreams.at(-1), /\/ImEnding Do/);
+  assert.match(s, /\/Count \d+/);
 });
 
 test('omits the chart section when no image is supplied', () => {
