@@ -64,7 +64,14 @@
 
   <section class="card full-only"><h2>HTTP requests</h2>
     <div id="reqs"></div>
-    <div class="row"><button id="addReq" class="btn purple sm">Add request</button><button id="correlate" class="btn light sm">Reuse login token</button><button id="importJmx" class="btn light sm">Import .jmx</button><button id="jmx" class="btn light sm">Export .jmx</button></div>
+    <div class="row"><button id="addReq" class="btn purple sm">Add request</button><button id="correlate" class="btn light sm">Reuse login token</button><button id="importJmx" class="btn light sm">Import .jmx</button><button id="importOpen" class="btn light sm">Import cURL / HAR</button><button id="jmx" class="btn light sm">Export .jmx</button></div>
+    <div id="importBox" class="importbox" hidden>
+      <label class="f" for="importText">Paste one or more cURL commands (DevTools &gt; Network &gt; right-click &gt; Copy as cURL), or HAR JSON</label>
+      <textarea id="importText" rows="6" placeholder="curl 'https://api.example.com/login' -H 'Content-Type: application/json' --data-raw '{&quot;user&quot;:&quot;alice&quot;}'"></textarea>
+      <label class="opt" style="margin-top:8px"><input type="checkbox" id="impStatics"> <span>HAR: also import scripts, styles and images</span></label>
+      <label class="opt" style="margin-top:6px"><input type="checkbox" id="impFirstParty" checked> <span>HAR: only import the main site (skip other domains)</span></label>
+      <div class="row" style="margin-top:10px"><button id="importGo" class="btn purple sm">Add requests</button><button id="importHar" class="btn light sm">Open .har file</button><button id="importCancel" class="btn light sm">Cancel</button></div>
+    </div>
     <p class="help" style="margin-top:10px">Assertions fail a sample on wrong status (blank = anything below 400), missing text, or a slow response. Exported .jmx files open in Apache JMeter 5.x, and JMeter .jmx files import back here.</p>
   </section>
 
@@ -79,6 +86,7 @@
       <h3>What went wrong (<span id="errCount">0</span> failed)</h3>
       <div class="tw" style="margin-top:0"><table><thead><tr><th>Reason</th><th>Times</th><th>Share of failures</th></tr></thead><tbody id="errBody"></tbody></table></div>
     </div>
+    <div id="compare" hidden></div>
     <div class="row" style="margin-top:12px"><button id="report" class="btn purple sm">PDF report</button><button id="csv" class="btn light sm">CSV</button><button id="json" class="btn light sm">JSON</button></div>
     <div id="log" role="log">Ready.</div>
   </section>
@@ -86,9 +94,10 @@
   <details class="card"><summary>Test history</summary>
     <div class="tw" style="margin-top:0"><table><thead><tr><th>Run</th><th>Req</th><th>Avg</th><th>P95</th><th>Err %</th><th></th></tr></thead><tbody id="hist"></tbody></table></div>
     <p class="help" id="histEmpty" style="margin-top:8px">Finished runs are saved here (last 30).</p>
+    <p class="help" style="margin-top:8px">Press <b>Baseline</b> on a good run. Every later run, or any run you view, is then compared against it.</p>
     <button id="clearHist" class="btn light sm" style="margin-top:10px">Clear history</button>
   </details>
 
   <p class="help">Sends real HTTP requests from this browser. Use only on sites you own or are authorized to test. For large tests, export the .jmx and run it in JMeter.</p>
 </main>
-<script src="jmx.js"></script><script src="pdf.js"></script><script src="correlate.js"></script><script src="extract.js"></script><script src="stats.js"></script><script src="session.js"></script><script src="panel.js"></script></body></html>
+<script src="jmx.js"></script><script src="pdf.js"></script><script src="correlate.js"></script><script src="extract.js"></script><script src="stats.js"></script><script src="importers.js"></script><script src="session.js"></script><script src="panel.js"></script></body></html>

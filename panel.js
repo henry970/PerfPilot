@@ -7,7 +7,7 @@ const withDefaults = r => { if(r.recorded) return r; if(!r.status&&!r.contains&&
 function jsonBody(r){ if(!['GET','HEAD'].includes(r.method)){ if(!r.body) r.body='{}'; if(!r.headers.trim()) r.headers='Content-Type: application/json'; } }
 const DEF = {name:'My test plan',threads:10,rampUp:5,think:0,thinkMax:0,cookies:true,mode:'duration',loops:10,duration:30,vars:'',data:'',csvMode:'rotate',pctls:'50,90,95,99',maxErrPct:'',maxP95Ms:'',minRps:'',requests:[newReq(1)]};
 let plan = JSON.parse(JSON.stringify(DEF));
-let running=false, controllers=new Set(), results=[], t0=0, active=0, lastLog=[], shown=null, tick=0, view='quick', rec=null;
+let running=false, controllers=new Set(), results=[], t0=0, active=0, lastLog=[], shown=null, tick=0, view='quick', rec=null, baseline=null;
 const save = () => chrome.storage.local.set({plan});
 const TEXT=['planName','threads','rampUp','think','thinkMax','loops','duration','vars','data','csvMode','pctls','maxErrPct','maxP95Ms','minRps'];
 
@@ -195,8 +195,31 @@ function show(S){
   const f=(r,k)=>r.n?r[k].toFixed(k==='err'?1:0):'-', pv=(r,i)=>r.n&&r.pcts&&r.pcts[i]!=null?r.pcts[i].toFixed(0):'-';
   $('#sum').innerHTML=S.rows.map(r=>`<tr><td>${esc(r.name)}${r.url?`<br><span class="help">${esc((r.method||'GET')+' '+r.url)}</span>`:''}</td><td>${r.n}</td><td>${f(r,'avg')}</td><td>${f(r,'min')}</td><td>${f(r,'max')}</td>${P.map((_,i)=>`<td>${pv(r,i)}</td>`).join('')}<td>${f(r,'err')}</td></tr>`).join('');
   renderVerdict(S);
+  renderCompare(S);
   draw(S.series);
 }
+// ---- Baseline comparison ----
+function renderCompare(S){
+  const box=$('#compare');
+  if(!baseline||!S||!S.total||S.id===baseline.id){ box.hidden=true; box.innerHTML=''; return; }
+  const c=compareRuns(baseline,S);
+  const fv=(v,u)=>v.toFixed(u===' ms'?0:1)+u;
+  const chg=(m,u)=>{ if(m.delta==null) return '<span class="cmp-new">new</span>';
+    const t=u==='%'?`${m.delta>=0?'+':''}${m.delta.toFixed(1)} pts`:Number.isFinite(m.pct)?`${m.pct>=0?'+':''}${m.pct.toFixed(0)}%`:'new';
+    return `<span class="cmp-${m.status}">${m.status==='better'?'▲ ':m.status==='worse'?'▼ ':''}${t}</span>`; };
+  const badge={worse:'<span class="vb bad">WORSE</span>',better:'<span class="vb ok">BETTER</span>',same:'<span class="vb none">NO REAL CHANGE</span>'}[c.overall];
+  const rows=c.rows.filter(r=>r.base!=null);
+  box.innerHTML=`<h3>Compared with baseline ${badge}</h3>
+    <p class="help">${esc(baseline.name)} · ${new Date(baseline.date).toLocaleString()} · ${baseline.threads} users <button id="clearBase" class="btn light sm" style="margin-left:6px">Clear baseline</button></p>
+    ${c.notes.map(n=>`<p class="help warn">${esc(n)}</p>`).join('')}
+    <div class="tw"><table><thead><tr><th>Metric</th><th>Baseline</th><th>This run</th><th>Change</th></tr></thead><tbody>
+    ${c.metrics.map(m=>`<tr><td>${m.label}</td><td>${fv(m.base,m.unit)}</td><td>${fv(m.cur,m.unit)}</td><td>${chg(m,m.unit)}</td></tr>`).join('')}</tbody></table></div>
+    ${rows.length?`<div class="tw"><table><thead><tr><th>Request (avg ms)</th><th>Baseline</th><th>This run</th><th>Change</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.base.toFixed(0)}</td><td>${r.cur.toFixed(0)}</td><td>${chg(r,' ms')}</td></tr>`).join('')}</tbody></table></div>`:''}`;
+  box.hidden=false;
+}
+async function setBaseline(S){ baseline=S||null; await chrome.storage.local.set({baseline}); const {history=[]}=await chrome.storage.local.get('history'); renderHistory(history); if(shown) renderCompare(shown); }
+$('#compare').addEventListener('click',e=>{ if(e.target.id==='clearBase'){ setBaseline(null); notice('Baseline cleared.',true); } });
 function renderVerdict(S){
   const sl=(S&&S.sla)||{pass:null,checks:[]}, b=(S&&S.breakdown)||{failed:0,byError:[]}, val=c=>(c.unit==='%'?c.value.toFixed(1):c.value.toFixed(0))+c.unit;
   $('#verdict').innerHTML=(sl.pass===null?'<span class="vb none">No pass/fail target set</span>':sl.pass?'<span class="vb ok">PASS</span>':'<span class="vb bad">FAIL</span>')
@@ -218,11 +241,12 @@ function draw(B){
 async function pushHistory(S){ const {history=[]}=await chrome.storage.local.get('history'); const h=[S,...history].slice(0,30); await chrome.storage.local.set({history:h}); renderHistory(h); }
 function renderHistory(h){
   const badge = s => (s&&s.sla&&s.sla.pass!==null) ? (s.sla.pass?'<span class="vb ok sm">PASS</span>':'<span class="vb bad sm">FAIL</span>') : '';
-  $('#hist').innerHTML=h.map((s,i)=>`<tr><td>${badge(s)}${esc(s.name)}<br><span class="help">${new Date(s.date).toLocaleString()} · ${s.threads} users</span></td><td>${s.total}</td><td>${s.avg.toFixed(0)}</td><td>${s.p95.toFixed(0)}</td><td>${s.errRate.toFixed(1)}</td><td><button class="btn light sm" data-view="${i}">View</button><button class="btn light sm" data-rm="${i}">Delete</button></td></tr>`).join('');
+  $('#hist').innerHTML=h.map((s,i)=>`<tr><td>${badge(s)}${esc(s.name)}<br><span class="help">${new Date(s.date).toLocaleString()} · ${s.threads} users</span></td><td>${s.total}</td><td>${s.avg.toFixed(0)}</td><td>${s.p95.toFixed(0)}</td><td>${s.errRate.toFixed(1)}</td><td><button class="btn light sm" data-view="${i}">View</button><button class="btn light sm${baseline&&baseline.id===s.id?' on':''}" data-base="${i}" title="Compare other runs against this one">${baseline&&baseline.id===s.id?'Baseline ✓':'Baseline'}</button><button class="btn light sm" data-rm="${i}">Delete</button></td></tr>`).join('');
   $('#histEmpty').style.display=h.length?'none':'';
 }
 $('#hist').addEventListener('click',async e=>{
-  const {history=[]}=await chrome.storage.local.get('history'), v=e.target.dataset.view, d=e.target.dataset.rm;
+  const {history=[]}=await chrome.storage.local.get('history'), v=e.target.dataset.view, d=e.target.dataset.rm, b=e.target.dataset.base;
+  if(b!==undefined&&history[b]){ const on=baseline&&baseline.id===history[b].id; await setBaseline(on?null:history[b]); notice(on?'Baseline cleared.':`"${history[b].name}" is now the baseline. New runs are compared against it.`,true); }
   if(v!==undefined&&history[v]){ show(history[v]); $('#results').scrollIntoView({behavior:'smooth'}); }
   if(d!==undefined){ history.splice(+d,1); await chrome.storage.local.set({history}); renderHistory(history); }
 });
@@ -463,23 +487,57 @@ async function startRec(){
   if($('#reload').checked) await chrome.tabs.reload(t.id);
   notice('Recording started. Browse the site, then press Stop & import.',true);
 }
-async function stopRec(){
-  detachRec(); const items=(rec?.items||[]).map(({key,...r})=>({...newReq(1),...r,recorded:true}));
-  await chrome.storage.session.remove('rec'); await chrome.action.setBadgeText({text:''}); rec=null;
-  if(items.length){ plan.requests=plan.requests.length===1&&!plan.requests[0].url?items:plan.requests.concat(items); }
-  const c=items.length?correlate():null;
-  const a=items.length?authToVariable(plan.requests):null;
-  if(a&&!parseVars(plan.vars)[a.name]) plan.vars=(plan.vars.trim()?plan.vars.trim()+'\n':'')+`${a.name}=${a.value}`;
-  save(); fillForm();
-  setView('full'); renderReqs();
-  if(items.length) notice(`Imported ${items.length} recorded requests${c?` - linked the "${c.name}" token so it is reused automatically`:' - if a login is failing, press "Reuse login token" to link its CSRF/auth token'}.`,true); else notice('No requests were captured. Make sure you browsed the recorded tab while recording.');
+// Adds recorded or imported requests to the plan (replacing the blank starter request), links a
+// login token if one is found and moves a hard-coded Authorization header into a variable.
+function addRequests(items){
+  let c=null;
+  if(items.length){
+    items=items.map(r=>({...newReq(1),...r,recorded:true}));
+    plan.requests=plan.requests.length===1&&!plan.requests[0].url?items:plan.requests.concat(items);
+    c=correlate();
+    const a=authToVariable(plan.requests);
+    if(a&&!parseVars(plan.vars)[a.name]) plan.vars=(plan.vars.trim()?plan.vars.trim()+'\n':'')+`${a.name}=${a.value}`;
+  }
+  save(); fillForm(); setView('full'); renderReqs();
+  return c;
 }
+const linkNote=c=>c?` - linked the "${c.name}" token so it is reused automatically`:' - if a login is failing, press "Reuse login token" to link its CSRF/auth token';
+async function stopRec(){
+  detachRec(); const items=(rec?.items||[]).map(({key,...r})=>r);
+  await chrome.storage.session.remove('rec'); await chrome.action.setBadgeText({text:''}); rec=null;
+  const c=addRequests(items);
+  if(items.length) notice(`Imported ${items.length} recorded requests${linkNote(c)}.`,true); else notice('No requests were captured. Make sure you browsed the recorded tab while recording.');
+}
+
+// ---- Import from cURL / HAR ----
+$('#importOpen').onclick=()=>{ const b=$('#importBox'); b.hidden=!b.hidden; if(!b.hidden) $('#importText').focus(); };
+$('#importCancel').onclick=()=>{ $('#importBox').hidden=true; };
+const impOpts=()=>({statics:$('#impStatics').checked,firstParty:$('#impFirstParty').checked});
+function finishImport(r){
+  const skip=r.skipped?` (${r.skipped} skipped: static files, other domains, preflights or duplicates)`:'';
+  if(!r.requests.length) return notice(`No requests to import from that ${r.kind}${skip}.`);
+  const c=addRequests(r.requests);
+  $('#importText').value=''; $('#importBox').hidden=true;
+  const n=r.requests.length;
+  notice(`Imported ${n} request${n>1?'s':''} from ${r.kind}${skip}${linkNote(c)}.${r.warnings.length?' Note: '+r.warnings.join('; ')+'.':''}`,true);
+}
+$('#importGo').onclick=()=>{ try{ finishImport(importText($('#importText').value,impOpts())); }catch(e){ notice('Could not import: '+(e.message||e)); } };
+$('#importHar').onclick=()=>{
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='.har,.json,application/json';
+  inp.onchange=async()=>{
+    const f=inp.files&&inp.files[0]; if(!f) return;
+    try{ const r=parseHar(await f.text(),impOpts()); finishImport({kind:'HAR',requests:r.requests,skipped:r.skipped,warnings:[]}); }
+    catch(e){ notice(`Could not import ${f.name}: `+(e.message||e)); }
+  };
+  inp.click();
+};
 
 $('#start').onclick=async()=>{ try{ if(view==='record') await (rec?stopRec():startRec()); else await start(); }catch(e){ notice('Something went wrong: '+(e.message||e)); } };
 chrome.storage.onChanged.addListener((c,area)=>{ if(area==='session'&&'rec' in c){ if(!c.rec.newValue){ rec=null; detachRec(); } else if(!rec) rec=c.rec.newValue; renderRec(); updateStart(); } });
 
-Promise.all([chrome.storage.local.get(['plan','view','history']),chrome.storage.session.get(['rec','auth'])]).then(([s,ses])=>{
+Promise.all([chrome.storage.local.get(['plan','view','history','baseline']),chrome.storage.session.get(['rec','auth'])]).then(([s,ses])=>{
   if(s.plan) plan={...DEF,...s.plan};
+  baseline=s.baseline||null;
   plan.requests=(plan.requests&&plan.requests.length?plan.requests:[newReq(1)]).map(r=>({...newReq(1),...r}));
   rec=ses.rec||null; if(rec) attachRec(); $('#auth').checked=!!ses.auth; fillForm(); show(summarize());
   setTimeout(()=>renderHistory(s.history||[]),0);

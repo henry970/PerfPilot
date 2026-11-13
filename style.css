@@ -75,3 +75,10 @@ body[data-view=full] :is(.q-only,.rec-only){display:none!important}
 .help.warn{color:#b45309;margin-top:6px}
 .req .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
 .req .line{grid-template-columns:1fr 92px}
+.importbox{margin-top:12px;border:1px dashed var(--field);border-radius:10px;padding:10px;background:var(--soft)}
+#compare{margin-top:14px}
+#compare h3{margin:0 0 6px;font-size:13px}
+.cmp-better{color:var(--good);font-weight:600}
+.cmp-worse{color:var(--bad);font-weight:600}
+.cmp-same,.cmp-new{color:var(--muted)}
+.btn.on{border-color:var(--cyan);color:var(--cyan-d)}

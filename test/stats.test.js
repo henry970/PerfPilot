@@ -2,7 +2,7 @@
 // Unit tests for the results diagnostics (stats.js). Run with: node --test
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parsePctls, errorKey, breakdown, sla, DEF_PCTLS } = require('../stats.js');
+const { parsePctls, errorKey, breakdown, sla, compareRuns, DEF_PCTLS } = require('../stats.js');
 
 test('parsePctls cleans and caps the percentile list', () => {
   assert.deepEqual(parsePctls('50,90,95,99'), [50, 90, 95, 99]);
@@ -67,4 +67,26 @@ test('sla treats a zero target as a real target', () => {
   const r = sla({ errRate: 0, p95: 10, thr: 1 }, { maxErrPct: 0 });
   assert.equal(r.checks.length, 1);
   assert.equal(r.pass, true);
+});
+test('compareRuns flags regressions and improvements against a baseline', () => {
+  const row = (name, avg, n = 10) => ({ name, method: 'GET', url: 'https://x.io/' + name, n, avg });
+  const base = { threads: 10, cfg: { mode: 'duration', duration: 30 }, avg: 200, p95: 400, errRate: 1, thr: 50, rows: [row('a', 100), row('b', 300)] };
+  const cur = { threads: 10, cfg: { mode: 'duration', duration: 30 }, avg: 260, p95: 402, errRate: 0.2, thr: 60, rows: [row('a', 150), row('b', 302), row('c', 80)] };
+  const c = compareRuns(base, cur);
+  const m = Object.fromEntries(c.metrics.map(x => [x.key, x]));
+  assert.equal(m.avg.status, 'worse'); assert.equal(Math.round(m.avg.pct), 30);
+  assert.equal(m.p95.status, 'same');                 // +2 ms is noise
+  assert.equal(m.errRate.status, 'better'); assert.ok(Math.abs(m.errRate.delta + 0.8) < 1e-9);
+  assert.equal(m.thr.status, 'better');               // higher throughput is better
+  assert.equal(c.overall, 'worse');
+  assert.deepEqual(c.rows.map(r => [r.name, r.status]), [['a', 'worse'], ['b', 'same'], ['c', 'new']]);
+  assert.deepEqual(c.notes, []);
+});
+
+test('compareRuns warns when the runs are set up differently', () => {
+  const S = (threads, duration) => ({ threads, cfg: { mode: 'duration', duration }, avg: 100, p95: 100, errRate: 0, thr: 10, rows: [] });
+  const c = compareRuns(S(10, 30), S(50, 60));
+  assert.equal(c.overall, 'same');
+  assert.equal(c.notes.length, 2);
+  assert.match(c.notes[0], /10 vs 50/);
 });
