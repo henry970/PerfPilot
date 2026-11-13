@@ -1,0 +1,103 @@
+<!doctype html><html><head><meta charset="utf-8"><title>PerfPilot</title><link rel="stylesheet" href="style.css"></head>
+<body data-view="quick">
+<header class="top">
+  <div class="brand"><svg viewBox="0 0 32 32" fill="none"><path d="M16 2.5 4.5 7v8.2c0 7 4.8 12.2 11.5 14.3 6.7-2.1 11.5-7.3 11.5-14.3V7L16 2.5Z" stroke="#1aa3e8" stroke-width="2" stroke-linejoin="round"/><path d="M9 16.5h4l2-5 3 9 2-4h3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><div><div class="title">PerfPilot</div><div class="sub">JMETER-STYLE LOAD TESTER</div></div></div>
+  <button id="clear" class="btn ghost sm">Clear</button>
+  <button id="stop" class="btn ghost sm" hidden>Stop</button>
+  <button id="start" class="btn cyan">Run test</button>
+</header>
+<p id="notice" role="alert" hidden></p>
+<main>
+  <div class="row views">
+    <label class="opt"><input type="radio" name="view" value="quick" checked> Quick</label>
+    <label class="opt"><input type="radio" name="view" value="record"> Record</label>
+    <label class="opt"><input type="radio" name="view" value="full"> Full plan</label>
+  </div>
+  <input id="planName" class="inp" placeholder="Test name (optional)" aria-label="Test name">
+  <label class="opt" id="authRow"><input type="checkbox" id="auth"> <span>I own these targets or am authorized to load test them</span></label>
+
+  <section class="pane q-only">
+    <div><label class="f" for="qUrl">Target URL</label>
+      <div class="row" style="flex-wrap:nowrap"><input id="qUrl" class="inp" placeholder="https://example.com/"><button id="useTab" class="btn light sm">Use tab</button></div></div>
+    <p class="help" id="qNote"></p>
+  </section>
+
+  <section class="pane rec-only">
+    <p class="help">Records requests from the active tab while you browse, then adds them to your plan as HTTP samplers. Requests to other domains (ads, analytics, CDNs) are left out by default.</p>
+    <label class="opt"><input type="checkbox" id="reload" checked> <span>Reload the tab to capture its first requests</span></label>
+    <label class="opt"><input type="checkbox" id="statics"> <span>Also capture scripts, styles and images</span></label>
+    <label class="opt"><input type="checkbox" id="firstParty" checked> <span>Only capture this site (skip other domains)</span></label>
+    <div><label class="f" for="ignore">Also ignore URLs containing (comma-separated)</label><input id="ignore" class="inp" placeholder="/log, /beacon, .gif, analytics"></div>
+    <div><span class="dot" id="recDot"></span><span id="recStatus" class="help">Not recording.</span></div>
+    <div id="recList"></div>
+    <div class="row"><button id="recClear" class="btn light sm">Clear captured list</button></div>
+  </section>
+
+  <section class="card not-rec"><h2>Thread group</h2>
+    <div class="grid">
+      <div><label class="f" for="threads">Users (threads)</label><input id="threads" class="inp" type="number" min="1" max="200"></div>
+      <div><label class="f" for="rampUp">Ramp-up (seconds)</label><input id="rampUp" class="inp" type="number" min="0"></div>
+      <div class="full-only"><label class="f" for="think">Think time min (ms)</label><input id="think" class="inp" type="number" min="0"></div>
+      <div class="full-only"><label class="f" for="thinkMax">Think time max (ms)</label><input id="thinkMax" class="inp" type="number" min="0"></div>
+    </div>
+    <div class="row" style="margin-top:12px;gap:16px">
+      <label class="opt"><input type="radio" name="mode" value="loops"> Loops <input id="loops" class="inp num" type="number" min="1"></label>
+      <label class="opt"><input type="radio" name="mode" value="duration"> Duration <input id="duration" class="inp num" type="number" min="1"> s</label>
+    </div>
+    <label class="opt full-only" style="margin-top:12px"><input type="checkbox" id="cookies"> Send browser cookies</label>
+    <p id="sessWarn" class="help warn" hidden></p>
+    <div class="row" style="margin-top:12px;gap:12px;align-items:flex-end">
+      <div><label class="f" for="maxErrPct">Pass if error rate &le; (%)</label><input id="maxErrPct" class="inp num" type="number" min="0" step="0.1" placeholder="any"></div>
+      <div><label class="f" for="maxP95Ms">P95 &le; (ms)</label><input id="maxP95Ms" class="inp num" type="number" min="0" placeholder="any"></div>
+      <div><label class="f" for="minRps">Throughput &ge; (req/s)</label><input id="minRps" class="inp num" type="number" min="0" step="0.1" placeholder="any"></div>
+      <div><label class="f" for="pctls">Percentiles</label><input id="pctls" class="inp" style="width:130px" placeholder="50,90,95,99"></div>
+    </div>
+    <p class="help" style="margin-top:6px">Leave a target blank to skip it. The run is marked PASS or FAIL against whatever you set.</p>
+  </section>
+
+  <section class="card full-only"><h2>Variables and test data</h2>
+    <label class="f" for="vars">Variables (one per line: name=value)</label><textarea id="vars" placeholder="host=https://api.example.com"></textarea>
+    <label class="f" for="data" style="margin-top:8px">Test data CSV (first line = column names)</label><textarea id="data" placeholder="user,password&#10;alice,pw1"></textarea>
+    <div style="margin-top:8px"><label class="f" for="csvMode">How users take rows from the CSV</label><select id="csvMode"><option value="rotate">Rotate rows across all users</option><option value="peruser">Pin one row per user (own identity)</option></select></div>
+    <p class="help" style="margin-top:8px">Use ${name} in URLs, headers and bodies. Extractors can read a token with json:path, regex:pattern, header:Name, cookie:Name or auto. Each user keeps its own variables, so extracted tokens never leak between users. Built-ins: ${__userId}, ${__loop}, ${__random}, ${__uuid}, ${__timestamp}, ${__urlencode:name}.</p>
+  </section>
+
+  <section class="card full-only"><h2>HTTP requests</h2>
+    <div id="reqs"></div>
+    <div class="row"><button id="addReq" class="btn purple sm">Add request</button><button id="correlate" class="btn light sm">Reuse login token</button><button id="importJmx" class="btn light sm">Import .jmx</button><button id="importOpen" class="btn light sm">Import cURL / HAR</button><button id="jmx" class="btn light sm">Export .jmx</button></div>
+    <div id="importBox" class="importbox" hidden>
+      <label class="f" for="importText">Paste one or more cURL commands (DevTools &gt; Network &gt; right-click &gt; Copy as cURL), or HAR JSON</label>
+      <textarea id="importText" rows="6" placeholder="curl 'https://api.example.com/login' -H 'Content-Type: application/json' --data-raw '{&quot;user&quot;:&quot;alice&quot;}'"></textarea>
+      <label class="opt" style="margin-top:8px"><input type="checkbox" id="impStatics"> <span>HAR: also import scripts, styles and images</span></label>
+      <label class="opt" style="margin-top:6px"><input type="checkbox" id="impFirstParty" checked> <span>HAR: only import the main site (skip other domains)</span></label>
+      <div class="row" style="margin-top:10px"><button id="importGo" class="btn purple sm">Add requests</button><button id="importHar" class="btn light sm">Open .har file</button><button id="importCancel" class="btn light sm">Cancel</button></div>
+    </div>
+    <p class="help" style="margin-top:10px">Assertions fail a sample on wrong status (blank = anything below 400), missing text, or a slow response. Exported .jmx files open in Apache JMeter 5.x, and JMeter .jmx files import back here.</p>
+  </section>
+
+  <section class="card" id="results"><h2>Live results</h2>
+    <p class="help">In plain terms: these numbers show how well the site held up while your visitors used it. Lower times are better, and a red error figure needs attention.</p>
+    <div id="verdict" class="verdict"></div>
+    <div class="metrics" id="metrics"></div>
+    <canvas id="chart" width="720" height="300"></canvas>
+    <div class="legend"><span><i style="background:#1aa3e8"></i>Avg ms</span><span><i style="background:#c4b5fd"></i>Requests/s</span><span><i style="background:#dc2626"></i>Errors/s</span></div>
+    <div class="tw"><table><thead id="sumHead"></thead><tbody id="sum"></tbody></table></div>
+    <div id="errors" hidden>
+      <h3>What went wrong (<span id="errCount">0</span> failed)</h3>
+      <div class="tw" style="margin-top:0"><table><thead><tr><th>Reason</th><th>Times</th><th>Share of failures</th></tr></thead><tbody id="errBody"></tbody></table></div>
+    </div>
+    <div id="compare" hidden></div>
+    <div class="row" style="margin-top:12px"><button id="report" class="btn purple sm">PDF report</button><button id="csv" class="btn light sm">CSV</button><button id="json" class="btn light sm">JSON</button></div>
+    <div id="log" role="log">Ready.</div>
+  </section>
+
+  <details class="card"><summary>Test history</summary>
+    <div class="tw" style="margin-top:0"><table><thead><tr><th>Run</th><th>Req</th><th>Avg</th><th>P95</th><th>Err %</th><th></th></tr></thead><tbody id="hist"></tbody></table></div>
+    <p class="help" id="histEmpty" style="margin-top:8px">Finished runs are saved here (last 30).</p>
+    <p class="help" style="margin-top:8px">Press <b>Baseline</b> on a good run. Every later run, or any run you view, is then compared against it.</p>
+    <button id="clearHist" class="btn light sm" style="margin-top:10px">Clear history</button>
+  </details>
+
+  <p class="help">Sends real HTTP requests from this browser. Use only on sites you own or are authorized to test. For large tests, export the .jmx and run it in JMeter.</p>
+</main>
+<script src="jmx.js"></script><script src="pdf.js"></script><script src="correlate.js"></script><script src="extract.js"></script><script src="stats.js"></script><script src="importers.js"></script><script src="session.js"></script><script src="panel.js"></script></body></html>

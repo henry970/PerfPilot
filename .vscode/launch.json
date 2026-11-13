@@ -1,0 +1,37 @@
+{
+  // Launch Chrome/Edge with this folder loaded as an unpacked MV3 extension, then
+  // debug background.js / panel.js. Press F5 and pick a configuration.
+  // The side panel opens when you click the PerfPilot toolbar icon.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Chrome: load PerfPilot (unpacked)",
+      "type": "chrome",
+      "request": "launch",
+      "runtimeExecutable": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "runtimeArgs": [
+        "--load-extension=${workspaceFolder}",
+        "--disable-features=DisableLoadExtensionCommandLineSwitch",
+        "--user-data-dir=${env:LOCALAPPDATA}\\PerfPilot\\chrome-debug-profile",
+        "--no-first-run",
+        "--no-default-browser-check"
+      ],
+      "url": "https://example.com/",
+      "sourceMaps": false
+    },
+    {
+      "name": "Edge: load PerfPilot (unpacked)",
+      "type": "chrome",
+      "request": "launch",
+      "runtimeExecutable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "runtimeArgs": [
+        "--load-extension=${workspaceFolder}",
+        "--user-data-dir=${env:LOCALAPPDATA}\\PerfPilot\\edge-debug-profile",
+        "--no-first-run",
+        "--no-default-browser-check"
+      ],
+      "url": "https://example.com/",
+      "sourceMaps": false
+    }
+  ]
+}
