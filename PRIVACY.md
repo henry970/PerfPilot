@@ -43,4 +43,4 @@ If this policy changes, the updated version will be posted at this address with 
 
 ## Contact
 
-Questions about this policy: [your contact email]
+Questions about this policy: open an issue at https://github.com/henry970/PerfPilot/issues
